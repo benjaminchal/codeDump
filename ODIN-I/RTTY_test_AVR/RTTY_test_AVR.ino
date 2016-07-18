@@ -15,7 +15,7 @@ int currentbitcount;
 volatile boolean sentence_needed = true;
 int tx_counter = 10000;
  
-char send_datastring[102] = "M0NBA Interupt Driven RTTY beacon \n";
+char send_datastring[102];
  
  
  
@@ -25,7 +25,7 @@ ISR(TIMER1_COMPA_vect){
  
     case 0: // when the next byte needs to be gotten
       if (ptr){
-  currentbyte = *ptr; // read first byte where pointer is pointing too
+        currentbyte = *ptr; // read first byte where pointer is pointing too
         if (currentbyte){
           tx_status = 1;
           sentence_needed = false;
@@ -120,8 +120,6 @@ void setup()
 {
   pinMode(RADIOPIN, OUTPUT);
   initialise_interrupt();
-  delay(100);
-  ptr = &send_datastring[0];
   Serial.begin(9600);
 }
  
@@ -140,22 +138,22 @@ void loop()
   sprintf(checksum_str, "*%04X\n", CHECKSUM);
   strcat(send_datastring,checksum_str);
   ptr = &send_datastring[0];
+  sentence_needed = false;
  }
 }
 
 uint16_t gps_CRC16_checksum (char *string) {
-    size_t i;
-    uint16_t crc;
-    uint8_t c;
+  size_t i;
+  uint16_t crc;
+  uint8_t c;
  
-    crc = 0xFFFF;
+  crc = 0xFFFF;
  
-    // Calculate checksum ignoring the first two $s
-    for (i = 2; i < strlen(string); i++) {
-        c = string[i];
-        crc = _crc_xmodem_update (crc, c);
-    }
+  // Calculate checksum ignoring the first two $s
+  for (i = 2; i < strlen(string); i++) {
+    c = string[i];
+    crc = _crc_xmodem_update (crc, c);
+  }
  
-    return crc;
+  return crc;
 }
-
