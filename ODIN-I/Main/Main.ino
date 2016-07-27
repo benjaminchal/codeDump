@@ -5,8 +5,12 @@
 #include <dht.h>
 #include <SPI.h>
 #include <SD.h>
-
-dht DHT; //Construct instances of the dht class
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+//Construct instances classes
+//dht DHT;
+SoftwareSerial GPS(6, 7);
+TinyGPSPlus tGPS;
 
 //Defining the pins
 #define DHT11_PIN 7
@@ -21,9 +25,18 @@ int currentbitcount;
 String log_dataString;
 volatile boolean sentence_needed = true;
 int tx_counter = 10000;
+byte gps_set_sucess = 0 ;
+
+
+// 0 = pre-launch
+// 1 = Accent
+// 2 = Deccent
+// 3 = landed
+int flight_stage = 0;
 
 
 char send_datastring[102];
+char live_datastring[102];
 
 unsigned long int logTimer = 2000;
  
@@ -85,6 +98,8 @@ ISR(TIMER1_COMPA_vect){
     }
  
 }
+
+
  
  
 // function t o toggle radio pin high and low as per the bit
@@ -124,6 +139,8 @@ void initialise_interrupt()
  
 void setup()
 {
+  Serial.begin(9600);
+  GPS_init();
   updateSen();
   pinMode(RADIOPIN, OUTPUT);
   initialise_interrupt();
@@ -133,24 +150,40 @@ void setup()
  
 void loop()
 {
- // for you to have a play with ;-
+  while(GPS.available() > 0)
+  {
+    tGPS.encode(GPS.read());
+  }
+  // for you to have a play with ;-
+  if(logTimer < millis()){
+    switch(flight_stage){
+      case 0: //pre-flight mode
+        if(tGPS.sentencesWithFix() == 0){
+          Serial.println("NO FIX FOUND");
+          snprintf(live_datastring,102,"FIX NOT FOUND");
+        }
+        break;
+    }
+    updateSen();
+    logData();
+    logTimer = millis() + 2000;
+  }
   
- if(sentence_needed){
-   setDataStr();
- }
-
- if(millis() > logTimer){
-  updateSen();
-  logData();
-  logTimer = millis() + 2000;
- }
+  if(sentence_needed){
+    //snprintf(live_datastring,102,"$$test,%d,19:59:00,21.0000,12.4549,1000,%d", tx_counter, temp);
+    setDataStr(live_datastring);
+    tx_counter++;
+  }
 }
 
 
-void setDataStr(){
-  int temp = DHT.temperature;
-  snprintf(send_datastring,102,"$$test,%d,19:59:00,21.0000,12.4549,1000,%d", tx_counter, temp);
-  tx_counter++;
+void setDataStr(char s[102]){
+  int temp = 25;//DHT.temperature;
+  
+  //snprintf(send_datastring,102,"$$test,%d,19:59:00,21.0000,12.4549,1000,%d", tx_counter, temp);
+  //
+
+  strcpy(send_datastring ,s);
   unsigned int CHECKSUM = gps_CRC16_checksum(send_datastring); // Calculates the checksum for this datastring
   char checksum_str[6];
   sprintf(checksum_str, "*%04X\n", CHECKSUM);
@@ -176,18 +209,16 @@ void sdINIT(){
 }
 
 void updateSen(){
-  DHT.read11(DHT11_PIN); //get data from the DHT11 sensor
+  //DHT.read11(DHT11_PIN); //get data from the DHT11 sensor
 }
 
 void logData(){
-  
-
   //Construct the datastring formatted for CSV
   log_dataString = millis();
   log_dataString += ",";
-  log_dataString += DHT.temperature;
+  log_dataString += 25;//DHT.temperature;
   log_dataString += ",";
-  log_dataString += DHT.humidity;
+  log_dataString += 20;//DHT.humidity;
 
   if(saveRow()){ //Calls the saveRow() function to write the dataString to the SD card
       Serial.print("LOGGED: ");
@@ -223,4 +254,99 @@ uint16_t gps_CRC16_checksum (char *string) {
   }
  
   return crc;
+}
+
+void GPS_init(){
+  GPS.begin(9600); 
+  // START OUR SERIAL DEBUG PORT
+  Serial.println("GPS INIT");
+  Serial.println("Initialising....");
+  //
+  // THE FOLLOWING COMMAND SWITCHES MODULE TO 4800 BAUD
+  // THEN SWITCHES THE SOFTWARE SERIAL TO 4,800 BAUD
+  //
+  GPS.print("$PUBX,41,1,0007,0003,4800,0*13\r\n"); 
+  GPS.begin(4800);
+  GPS.flush();
+ 
+  //  THIS COMMAND SETS FLIGHT MODE AND CONFIRMS IT 
+  Serial.println("Setting uBlox nav mode: ");
+  uint8_t setNav[] = {
+    0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 
+    0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0xDC };
+  while(!gps_set_sucess)
+  {
+    sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
+    gps_set_sucess=getUBX_ACK(setNav);
+  }
+  gps_set_sucess=0;
+}
+
+//GPS STUFF
+// Send a byte array of UBX protocol to the GPS
+void sendUBX(uint8_t *MSG, uint8_t len) {
+  for(int i=0; i<len; i++) {
+    GPS.write(MSG[i]);
+    Serial.print(MSG[i], HEX);
+  }
+}
+ 
+ 
+// Calculate expected UBX ACK packet and parse UBX response from GPS
+boolean getUBX_ACK(uint8_t *MSG) {
+  uint8_t b;
+  uint8_t ackByteID = 0;
+  uint8_t ackPacket[10];
+  unsigned long startTime = millis();
+  Serial.print(" * Reading ACK response: ");
+ 
+  // Construct the expected ACK packet    
+  ackPacket[0] = 0xB5;  // header
+  ackPacket[1] = 0x62;  // header
+  ackPacket[2] = 0x05;  // class
+  ackPacket[3] = 0x01;  // id
+  ackPacket[4] = 0x02;  // length
+  ackPacket[5] = 0x00;
+  ackPacket[6] = MSG[2];  // ACK class
+  ackPacket[7] = MSG[3];  // ACK id
+  ackPacket[8] = 0;   // CK_A
+  ackPacket[9] = 0;   // CK_B
+ 
+  // Calculate the checksums
+  for (uint8_t i=2; i<8; i++) {
+    ackPacket[8] = ackPacket[8] + ackPacket[i];
+    ackPacket[9] = ackPacket[9] + ackPacket[8];
+  }
+ 
+  while (1) {
+ 
+    // Test for success
+    if (ackByteID > 9) {
+      // All packets in order!
+      Serial.println(" (SUCCESS!)");
+      return true;
+    }
+ 
+    // Timeout if no valid response in 3 seconds
+    if (millis() - startTime > 3000) { 
+      Serial.println(" (FAILED!)");
+      return false;
+    }
+ 
+    // Make sure data is available to read
+    if (GPS.available()) {
+      b = GPS.read();
+ 
+      // Check that bytes arrive in sequence as per expected ACK packet
+      if (b == ackPacket[ackByteID]) { 
+        ackByteID++;
+        Serial.print(b, HEX);
+      } 
+      else {
+        ackByteID = 0;  // Reset and look again, invalid order
+      }
+ 
+    }
+  }
 }
