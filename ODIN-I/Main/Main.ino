@@ -1,8 +1,9 @@
-#include <string.h>
+
+#include <stdlib.h>
 #include <util/crc16.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <dht.h>
+//#include <dht.h>
 #include <SPI.h>
 #include <SD.h>
 #include <TinyGPS++.h>
@@ -22,11 +23,14 @@ volatile int tx_status = 0;
 volatile char *ptr = NULL;
 char currentbyte;
 int currentbitcount;
-String log_dataString;
+char log_dataString[50];
 volatile boolean sentence_needed = true;
 int tx_counter = 10000;
 byte gps_set_sucess = 0 ;
 
+char tLAT[10];
+char tLNG[10];
+//char tALT[5];
 
 // 0 = pre-launch
 // 1 = Accent
@@ -139,12 +143,12 @@ void initialise_interrupt()
  
 void setup()
 {
+  GPS.begin(9600); 
   Serial.begin(9600);
-  GPS_init();
-  updateSen();
+//  updateSen();
   pinMode(RADIOPIN, OUTPUT);
   initialise_interrupt();
-  Serial.begin(9600);
+  //Serial.begin(9600);
   sdINIT();
 }
  
@@ -153,6 +157,7 @@ void loop()
   while(GPS.available() > 0)
   {
     tGPS.encode(GPS.read());
+    //Serial.write(GPS.read());
   }
   // for you to have a play with ;-
   if(logTimer < millis()){
@@ -161,10 +166,22 @@ void loop()
         if(tGPS.sentencesWithFix() == 0){
           Serial.println("NO FIX FOUND");
           snprintf(live_datastring,102,"FIX NOT FOUND");
+        }else{
+          //String tlat = String(tGPS.location.lat(), 6);
+          //String tlng = String(tGPS.location.lat(), 6);
+          
+          dtostrf(tGPS.location.lat(),9, 6, tLAT);
+          
+          dtostrf(tGPS.location.lng(),9, 6, tLNG);
+          
+          snprintf(live_datastring,102,"$$test,%d,%2d:%2d:%2d,%s,%s,%d", tx_counter,
+          tGPS.time.hour(), tGPS.time.minute(), tGPS.time.second(),
+          tLAT, tLNG, tGPS.altitude.meters());
+          tx_counter++;
         }
         break;
     }
-    updateSen();
+    //updateSen();
     logData();
     logTimer = millis() + 2000;
   }
@@ -203,7 +220,7 @@ void sdINIT(){
   //If the file datalog.csv does not exist then set up the headings for the spreadsheet
   if (!SD.exists("datalog.csv")){
     Serial.println("datalog.csv, Writing Headers");
-    log_dataString = "Time,Temp,Humidity";
+    snprintf(log_dataString,50, "Time,Latitude,Longditude,Altitude");
     saveRow();
   }
 }
@@ -214,11 +231,9 @@ void updateSen(){
 
 void logData(){
   //Construct the datastring formatted for CSV
-  log_dataString = millis();
-  log_dataString += ",";
-  log_dataString += 25;//DHT.temperature;
-  log_dataString += ",";
-  log_dataString += 20;//DHT.humidity;
+  snprintf(log_dataString, 50,"%2d:%2d:%2d,%s,%s,%d",
+  tGPS.time.hour(), tGPS.time.minute(), tGPS.time.second(),
+  tLAT, tLNG, tGPS.altitude.meters());
 
   if(saveRow()){ //Calls the saveRow() function to write the dataString to the SD card
       Serial.print("LOGGED: ");
@@ -240,7 +255,7 @@ int saveRow(){
   }
 }
 
-uint16_t gps_CRC16_checksum (char *string) {
+uint16_t gps_CRC16_checksum (char *strings) {
   size_t i;
   uint16_t crc;
   uint8_t c;
@@ -248,105 +263,11 @@ uint16_t gps_CRC16_checksum (char *string) {
   crc = 0xFFFF;
  
   // Calculate checksum ignoring the first two $s
-  for (i = 2; i < strlen(string); i++) {
-    c = string[i];
+  for (i = 2; i < strlen(strings); i++) {
+    c = strings[i];
     crc = _crc_xmodem_update (crc, c);
   }
  
   return crc;
 }
 
-void GPS_init(){
-  GPS.begin(9600); 
-  // START OUR SERIAL DEBUG PORT
-  Serial.println("GPS INIT");
-  Serial.println("Initialising....");
-  //
-  // THE FOLLOWING COMMAND SWITCHES MODULE TO 4800 BAUD
-  // THEN SWITCHES THE SOFTWARE SERIAL TO 4,800 BAUD
-  //
-  GPS.print("$PUBX,41,1,0007,0003,4800,0*13\r\n"); 
-  GPS.begin(4800);
-  GPS.flush();
- 
-  //  THIS COMMAND SETS FLIGHT MODE AND CONFIRMS IT 
-  Serial.println("Setting uBlox nav mode: ");
-  uint8_t setNav[] = {
-    0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 
-    0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0xDC };
-  while(!gps_set_sucess)
-  {
-    sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
-    gps_set_sucess=getUBX_ACK(setNav);
-  }
-  gps_set_sucess=0;
-}
-
-//GPS STUFF
-// Send a byte array of UBX protocol to the GPS
-void sendUBX(uint8_t *MSG, uint8_t len) {
-  for(int i=0; i<len; i++) {
-    GPS.write(MSG[i]);
-    Serial.print(MSG[i], HEX);
-  }
-}
- 
- 
-// Calculate expected UBX ACK packet and parse UBX response from GPS
-boolean getUBX_ACK(uint8_t *MSG) {
-  uint8_t b;
-  uint8_t ackByteID = 0;
-  uint8_t ackPacket[10];
-  unsigned long startTime = millis();
-  Serial.print(" * Reading ACK response: ");
- 
-  // Construct the expected ACK packet    
-  ackPacket[0] = 0xB5;  // header
-  ackPacket[1] = 0x62;  // header
-  ackPacket[2] = 0x05;  // class
-  ackPacket[3] = 0x01;  // id
-  ackPacket[4] = 0x02;  // length
-  ackPacket[5] = 0x00;
-  ackPacket[6] = MSG[2];  // ACK class
-  ackPacket[7] = MSG[3];  // ACK id
-  ackPacket[8] = 0;   // CK_A
-  ackPacket[9] = 0;   // CK_B
- 
-  // Calculate the checksums
-  for (uint8_t i=2; i<8; i++) {
-    ackPacket[8] = ackPacket[8] + ackPacket[i];
-    ackPacket[9] = ackPacket[9] + ackPacket[8];
-  }
- 
-  while (1) {
- 
-    // Test for success
-    if (ackByteID > 9) {
-      // All packets in order!
-      Serial.println(" (SUCCESS!)");
-      return true;
-    }
- 
-    // Timeout if no valid response in 3 seconds
-    if (millis() - startTime > 3000) { 
-      Serial.println(" (FAILED!)");
-      return false;
-    }
- 
-    // Make sure data is available to read
-    if (GPS.available()) {
-      b = GPS.read();
- 
-      // Check that bytes arrive in sequence as per expected ACK packet
-      if (b == ackPacket[ackByteID]) { 
-        ackByteID++;
-        Serial.print(b, HEX);
-      } 
-      else {
-        ackByteID = 0;  // Reset and look again, invalid order
-      }
- 
-    }
-  }
-}
