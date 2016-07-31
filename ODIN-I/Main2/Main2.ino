@@ -346,7 +346,7 @@ TinyGPS tGPS;
     tGPS.get_position(&gps_lat, &gps_lon, &gps_fix_age);
     dtostrf(gps_lat/100000.0,9, 6, tLAT);
     dtostrf(gps_lon/100000.0,9, 6, tLNG);
-    dtostrf(tGPS.altitude()/100.0,9, 0, tLNG);
+    dtostrf(tGPS.altitude()/100.0,9, 0, tALT);
   }
 
 void setup() {
@@ -359,6 +359,7 @@ void setup() {
 void loop() {
   
     if(logTimer < millis()){
+      GPS_poll();
     switch(flight_stage){
       case 0: //pre-flight mode
         if(tGPS.has_fix() == 0){
@@ -369,7 +370,7 @@ void loop() {
           
           gpsStrParse();
           
-          snprintf(live_datastring,102,"$$test,%d,%2d:%2d:%2d,%s,%s,%s", tx_counter,
+          snprintf(live_datastring,102,"$$ODIN-I,%05d,%02d:%02d:%02d,%s,%s,%s", tx_counter,
           gps_hour, gps_minute, gps_second,
           tLAT, tLNG, tALT);
           tx_counter++;
